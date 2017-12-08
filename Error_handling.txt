@@ -1,0 +1,123 @@
+
+
+Errors and exceptions in PowerShell are structured objects. The error message you see printed on the console is actually a formatted message with information from several elements of the error/exception object. You can (re-)construct it yourself like this:
+
+$formatstring = "{0} : {1}`n{2}`n" +
+                "    + CategoryInfo          : {3}`n"
+                "    + FullyQualifiedErrorId : {4}`n"
+$fields = $_.InvocationInfo.MyCommand.Name,
+          $_.ErrorDetails.Message,
+          $_.InvocationInfo.PositionMessage,
+          $_.CategoryInfo.ToString(),
+          $_.FullyQualifiedErrorId
+
+$formatstring -f $fields
+
+If you just want the error message displayed in your catch block you can simply echo the current object variable (which holds the error at that point):
+
+try {
+  ...
+} catch {
+  $_
+}
+
+If you need colored output use Write-Host with a formatted string as described above:
+
+try {
+  ...
+} catch {
+  ...
+  Write-Host -Foreground Red -Background Black ($formatstring -f $fields)
+}
+
+With that said, usually you don't want to just display the error message as-is in an exception handler (otherwise the -ErrorAction Stop would be pointless). The structured error/exception objects provide you with additional information that you can use for better error control. For instance you have $_.Exception.HResult with the actual error number. $_.ScriptStackTrace and $_.Exception.StackTrace, so you can display stacktraces when debugging. $_.Exception.InnerException gives you access to nested exceptions that often contain additional information about the error (top level PowerShell errors can be somewhat generic). You can unroll these nested exceptions with something like this:
+
+$e = $_.Exception
+$msg = $e.Message
+while ($e.InnerException) {
+  $e = $e.InnerException
+  $msg += "`n" + $e.Message
+}
+$msg
+
+In your case the information you want to extract seems to be in $_.ErrorDetails.Message. It's not quite clear to me if you have an object or a JSON string there, but you should be able to get information about the types and values of the members of $_.ErrorDetails by running
+
+$_.ErrorDetails | Get-Member
+$_.ErrorDetails | Format-List *
+
+If $_.ErrorDetails.Message is an object you should be able to obtain the message string like this:
+
+$_.ErrorDetails.Message.message
+
+otherwise you need to convert the JSON string to an object first:
+
+$_.ErrorDetails.Message | ConvertFrom-Json | Select-Object -Expand message
+
+Depending what kind of error you're handling, exceptions of particular types might also include more specific information about the problem at hand. In your case for instance you have a WebException which in addition to the error message ($_.Exception.Message) contains the actual response from the server:
+
+PS C:\> $e.Exception | Get-Member
+
+   TypeName: System.Net.WebException
+
+Name             MemberType Definition
+----             ---------- ----------
+Equals           Method     bool Equals(System.Object obj), bool _Exception.E...
+GetBaseException Method     System.Exception GetBaseException(), System.Excep...
+GetHashCode      Method     int GetHashCode(), int _Exception.GetHashCode()
+GetObjectData    Method     void GetObjectData(System.Runtime.Serialization.S...
+GetType          Method     type GetType(), type _Exception.GetType()
+ToString         Method     string ToString(), string _Exception.ToString()
+Data             Property   System.Collections.IDictionary Data {get;}
+HelpLink         Property   string HelpLink {get;set;}
+HResult          Property   int HResult {get;}
+InnerException   Property   System.Exception InnerException {get;}
+Message          Property   string Message {get;}
+Response         Property   System.Net.WebResponse Response {get;}
+Source           Property   string Source {get;set;}
+StackTrace       Property   string StackTrace {get;}
+Status           Property   System.Net.WebExceptionStatus Status {get;}
+TargetSite       Property   System.Reflection.MethodBase TargetSite {get;}
+
+which provides you with information like this:
+
+PS C:\> $e.Exception.Response
+
+IsMutuallyAuthenticated : False
+Cookies                 : {}
+Headers                 : {Keep-Alive, Connection, Content-Length, Content-T...}
+SupportsHeaders         : True
+ContentLength           : 198
+ContentEncoding         :
+ContentType             : text/html; charset=iso-8859-1
+CharacterSet            : iso-8859-1
+Server                  : Apache/2.4.10
+LastModified            : 17.07.2016 14:39:29
+StatusCode              : NotFound
+StatusDescription       : Not Found
+ProtocolVersion         : 1.1
+ResponseUri             : http://www.example.com/
+Method                  : POST
+IsFromCache             : False
+
+Since not all exceptions have the exact same set of properties you may want to use specific handlers for particular exceptions:
+
+try {
+  ...
+} catch [System.ArgumentException] {
+  # handle argument exceptions
+} catch [System.Net.WebException] {
+  # handle web exceptions
+} catch {
+  # handle all other exceptions
+}
+
+If you have operations that need to be done regardless of whether an error occured or not (cleanup tasks like closing a socket or a database connection) you can put them in a finally block after the exception handling:
+
+try {
+  ...
+} catch {
+  ...
+} finally {
+  # cleanup operations go here
+}
+
